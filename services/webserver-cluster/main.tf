@@ -87,7 +87,6 @@ resource "aws_security_group_rule" "allow_all_outbound" {
     cidr_blocks = local.all_ips
 }
 
-
 resource "aws_lb_target_group" "asg" {
     name     = "terraform-asg-example"
     port     = var.server_port
@@ -157,7 +156,17 @@ resource "aws_autoscaling_group" "test" {
 
   tag {
     key                 = "Name"
-    value               = "terraform-asg-example"
+    value               = var.cluster_name
     propagate_at_launch = true
+  }
+
+  dynamic "tag" {
+    for_each = var.custom_tags
+    
+    content {
+      key                 = tag.key
+      value               = tag.value
+      propagate_at_launch = true
+    }
   }
 }
