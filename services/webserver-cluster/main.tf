@@ -24,7 +24,7 @@ locals {
 
 resource "aws_launch_template" "example" {
   name_prefix     = "terraform-"
-  image_id        = "ami-0fb653ca2d3203ac1"
+  image_id        = var.ami
   instance_type   = var.instance_type
   vpc_security_group_ids = [aws_security_group.instance.id]
 
@@ -32,11 +32,14 @@ resource "aws_launch_template" "example" {
     server_port = var.server_port
     db_address  = data.terraform_remote_state.example.outputs.address
     db_port     = data.terraform_remote_state.example.outputs.port
+    server_text = var.server_text
   }))
 
   lifecycle {
     create_before_destroy = true
   }
+
+  update_default_version = true
 }
 
 resource "aws_lb" "example" {
@@ -50,7 +53,7 @@ resource "aws_lb_listener" "http" {
     load_balancer_arn = aws_lb.example.arn 
     port              = local.http_port
     protocol          = "HTTP"
-
+    
     # By default, return a simple 404 page 
     default_action {
         type = "fixed-response"
@@ -141,11 +144,21 @@ resource "aws_security_group" "instance" {
     }
 }
 
+locals {
+  user_data_hash = sha1(file("${path.module}/user-data.sh"))
+}
+
 resource "aws_autoscaling_group" "test" {
+
+  # Explicity depends of the launch configuraion's name so each time
+  # it's replaced, this ASG is also replace
+  name = var.cluster_name
+
   launch_template {
     id      = aws_launch_template.example.id
-    version = "$Latest"
+    version = aws_launch_template.example.latest_version
   }
+
   vpc_zone_identifier = data.aws_subnets.default.ids
 
   target_group_arns = [aws_lb_target_group.asg.arn]
@@ -160,13 +173,33 @@ resource "aws_autoscaling_group" "test" {
     propagate_at_launch = true
   }
 
-  dynamic "tag" {
-    for_each = var.custom_tags
-    
-    content {
-      key                 = tag.key
-      value               = tag.value
-      propagate_at_launch = true
+  instance_refresh {
+    strategy = "Rolling"
+    preferences {
+      min_healthy_percentage = 50
     }
   }
+}
+
+
+resource "aws_autoscaling_schedule" "scale-out-during-business-hours" {
+  count = var.enable_autoscaling ? 1 : 0
+
+  scheduled_action_name  = "${var.cluster_name}scale-out-during-business-hours"
+  min_size               = 2
+  max_size               = 10
+  desired_capacity       = 10
+  recurrence             = "0 9 * * *"
+  autoscaling_group_name = aws_autoscaling_group.test.name
+}
+
+resource "aws_autoscaling_schedule" "scale_in_at_night" {
+  count = var.enable_autoscaling ? 1 : 0
+
+  scheduled_action_name  = "${var.cluster_name}scale-in-at-night"
+  min_size               = 2
+  max_size               = 10
+  desired_capacity       = 2
+  recurrence             = "0 17 * * *"
+  autoscaling_group_name = aws_autoscaling_group.test.name
 }
